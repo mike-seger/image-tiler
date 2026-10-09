@@ -8,9 +8,9 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="site-header">
-    <div>
-      <p class="eyebrow">Local image layout tool</p>
+  <main>
+    <aside class="sidebar">
+      <header class="site-header">
       <div class="title-row">
         <h1>Image Tiler</h1>
         <details class="help">
@@ -19,15 +19,13 @@
             <h2>What is this for?</h2>
             <p>Image Tiler repeats a PNG in a print-ready layout with frames and registration-style corner markers.</p>
             <p>Use it to prepare sheets for online sticker or label printing services. All processing happens locally in your browser.</p>
+            <p>Images stay on this device. Nothing is uploaded.</p>
           </div>
         </details>
       </div>
-    </div>
-    <p>Images stay on this device. Nothing is uploaded.</p>
-  </header>
+      </header>
 
-  <main>
-    <section class="controls" aria-label="Image layout controls">
+      <section class="controls" aria-label="Image layout controls">
       <div class="control-group">
         <h2>Source image</h2>
         <label class="file-input">
@@ -65,7 +63,7 @@
       <div class="control-group">
         <h2>Background</h2>
         <div class="color-fields">
-          <label>Color <input id="background-color" type="color" value="#000000"></label>
+          <label>Color <input id="background-color" type="color" value="#5b5f7b"></label>
           <label>Alpha <input id="background-alpha" type="range" min="0" max="1" step="0.01" value="0"></label>
           <output id="background-alpha-value">0.00</output>
         </div>
@@ -99,7 +97,8 @@
           <label>Frame width <span class="dimension-input"><input id="frame-width" type="number" min="0.01" step="0.01" value="5"><select id="frame-width-unit"><option value="mm">mm</option><option value="in">inch</option><option value="cm">cm</option><option value="px">pixels</option></select></span></label>
         </div>
       </div>
-    </section>
+      </section>
+    </aside>
 
     <section class="preview-panel" aria-label="Generated preview">
       <div class="preview-header">

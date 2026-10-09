@@ -13,6 +13,7 @@ const manualRepetitions = document.querySelector("#manual-repetitions");
 const cornerFields = document.querySelector("#corner-fields");
 const frameFields = document.querySelector("#frame-fields");
 const resetButton = document.querySelector("#reset");
+const help = document.querySelector(".help");
 const STORAGE_KEY = "image-tiler-controls-v1";
 const MILLIMETRES_PER_UNIT = { mm: 1, in: 25.4, cm: 10, px: 25.4 / 96 };
 const PREVIEW_SIDE_MARGIN = 0.03;
@@ -293,30 +294,41 @@ function render(canvas, scale = 1) {
   }
 }
 
+function viewportWidth() {
+  return previewViewport.offsetWidth - 2 * previewViewport.clientLeft;
+}
+
+function viewportHeight() {
+  return previewViewport.offsetHeight - 2 * previewViewport.clientTop;
+}
+
 function resizePreviewStage() {
   const horizontalMargin = preview.width * PREVIEW_SIDE_MARGIN;
   const verticalMargin = preview.height * PREVIEW_SIDE_MARGIN;
   const stageWidth = Math.max(
-    previewViewport.clientWidth,
+    viewportWidth(),
     preview.width + 2 * horizontalMargin,
   );
   const stageHeight = Math.max(
-    previewViewport.clientHeight,
+    viewportHeight(),
     preview.height + 2 * verticalMargin,
   );
+  previewViewport.style.overflow = stageWidth <= viewportWidth() && stageHeight <= viewportHeight()
+    ? "hidden"
+    : "";
   previewStage.style.width = `${stageWidth}px`;
   previewStage.style.height = `${stageHeight}px`;
-  preview.style.left = `${stageWidth === previewViewport.clientWidth
+  preview.style.left = `${stageWidth === viewportWidth()
     ? (stageWidth - preview.width) / 2
     : horizontalMargin}px`;
-  preview.style.top = `${stageHeight === previewViewport.clientHeight
+  preview.style.top = `${stageHeight === viewportHeight()
     ? (stageHeight - preview.height) / 2
     : verticalMargin}px`;
 }
 
 function centerPreview() {
-  const targetLeft = Math.max(0, (previewViewport.clientWidth - preview.width) / 2);
-  const targetTop = Math.max(0, (previewViewport.clientHeight - preview.height) / 2);
+  const targetLeft = Math.max(0, (viewportWidth() - preview.width) / 2);
+  const targetTop = Math.max(0, (viewportHeight() - preview.height) / 2);
   previewViewport.scrollLeft = Math.max(0, Number.parseFloat(preview.style.left) - targetLeft);
   previewViewport.scrollTop = Math.max(0, Number.parseFloat(preview.style.top) - targetTop);
 }
@@ -339,9 +351,10 @@ function renderPreview(center = false) {
 function minimumPreviewZoom() {
   return Math.min(
     1,
-    previewViewport.clientWidth * (1 - 2 * PREVIEW_SIDE_MARGIN)
+    viewportWidth() * (1 - 2 * PREVIEW_SIDE_MARGIN)
       / (layout.outputWidth * previewBaseScale),
-    previewViewport.clientHeight / (layout.outputHeight * previewBaseScale),
+    viewportHeight() * (1 - 2 * PREVIEW_SIDE_MARGIN)
+      / (layout.outputHeight * previewBaseScale),
   );
 }
 
@@ -559,6 +572,11 @@ document.querySelectorAll("input, select").forEach((element) => {
 });
 
 resetButton.addEventListener("click", resetControls);
+document.addEventListener("click", (event) => {
+  if (help.open && !help.contains(event.target)) {
+    help.open = false;
+  }
+});
 preview.addEventListener("wheel", zoomPreview, { passive: false });
 preview.addEventListener("pointerdown", startPan);
 preview.addEventListener("pointermove", panPreview);
@@ -569,8 +587,13 @@ previewViewport.addEventListener("wheel", (event) => {
     event.preventDefault();
   }
 }, { passive: false });
-new ResizeObserver(() => {
-  if (!layout || resizeAnimationFrame) {
+let lastViewportBox = "";
+new ResizeObserver((entries) => {
+  const box = entries[0].borderBoxSize?.[0];
+  const key = box ? `${box.inlineSize}x${box.blockSize}` : "";
+  const unchanged = key !== "" && key === lastViewportBox;
+  lastViewportBox = key;
+  if (!layout || resizeAnimationFrame || unchanged) {
     return;
   }
   resizeAnimationFrame = requestAnimationFrame(() => {

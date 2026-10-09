@@ -28,19 +28,16 @@ body {
 
 .site-header {
   flex: none;
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 2rem;
-  padding: 2rem clamp(1.25rem, 5vw, 5rem);
-  border-bottom: 1px solid var(--border);
+  padding: .6rem clamp(.25rem, 1vw, 1rem);
+  border: 1px solid var(--border);
+  border-radius: 14px;
   background: linear-gradient(120deg, #17233a, var(--background) 58%);
 }
 
 h1, h2, p { margin: 0; }
-h1 { font-size: clamp(1.8rem, 4vw, 2.8rem); }
+h1 { font-size: clamp(1.6rem, 3vw, 2.2rem); }
 h2 { font-size: 1.05rem; }
-.site-header > p, .hint, .status { color: var(--muted); }
+.hint, .status { color: var(--muted); }
 .eyebrow { color: var(--accent); font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .title-row { display: flex; align-items: center; gap: .7rem; }
 .help { position: relative; }
@@ -83,16 +80,17 @@ main {
   gap: 1.25rem;
   min-height: 0;
   overflow: hidden;
-  padding: 1.25rem clamp(1.25rem, 4vw, 4rem);
+  padding: 1.25rem;
 }
 
+.sidebar { display: flex; flex-direction: column; gap: 1.25rem; min-height: 0; }
 .controls, .preview-panel {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
 }
 
-.controls { min-height: 0; overflow: auto; }
+.controls { flex: 1; min-height: 0; overflow: auto; }
 .control-group { padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--border); }
 .control-group:last-child { border-bottom: 0; }
 .control-group h2 { margin-bottom: .9rem; }
@@ -128,7 +126,7 @@ button.secondary { border: 1px solid var(--border); background: var(--surface-ra
 .file-input input { min-height: auto; max-width: 155px; border: 0; background: transparent; }
 .hidden { display: none; }
 
-.preview-panel { min-width: 0; min-height: 0; padding: 1.2rem; display: flex; flex-direction: column; }
+.preview-panel { min-width: 0; min-height: 0; padding: 1.2rem 1.2rem .6rem; display: flex; flex-direction: column; }
 .preview-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .preview-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: .6rem; }
 .preview-header h2 { margin-top: .15rem; font-size: 1.25rem; }
@@ -140,7 +138,7 @@ button.secondary { border: 1px solid var(--border); background: var(--surface-ra
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #505050;
+  background: #313f5e;
   overscroll-behavior: contain;
 }
 #preview-stage {
@@ -166,15 +164,14 @@ canvas {
 .canvas-wrap.initializing { overflow: hidden; }
 #empty-preview { color: var(--muted); padding: 1rem; text-align: center; }
 .status { min-height: 1.4rem; margin-top: .8rem; font-size: .86rem; }
-.preview-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.preview-footer { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .zoom-help { margin-top: .8rem; color: var(--muted); font-size: .78rem; text-align: right; }
 .status.error { color: var(--danger); }
 
 @media (max-width: 900px) {
   html, body { height: auto; }
   body { min-height: 100vh; display: block; overflow: auto; }
-  .site-header { align-items: start; flex-direction: column; }
-  main { display: grid; overflow: visible; }
+  main { grid-template-columns: 1fr; overflow: visible; }
   .controls { overflow: hidden; }
   .preview-panel { min-height: 460px; }
   .canvas-wrap { flex: none; height: min(72vh, 720px); }
