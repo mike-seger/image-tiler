@@ -118,7 +118,7 @@ button.secondary { border: 1px solid var(--border); background: var(--surface-ra
 .dimension-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 .dimension-input input { border-radius: 7px 0 0 7px; }
 .dimension-input select { width: auto; border-left: 0; border-radius: 0 7px 7px 0; }
-.color-fields { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: .75rem; margin-bottom: .75rem; }
+.color-fields { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: .75rem; margin-bottom: .75rem; }
 .color-fields output { min-width: 3.2rem; padding-bottom: .5rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .toggle { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; color: var(--text); }
 .toggle input { min-height: auto; accent-color: var(--accent); }

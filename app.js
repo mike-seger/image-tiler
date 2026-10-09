@@ -152,7 +152,9 @@ function getSettings() {
     repetitionMode: controls["repetition-mode"].value,
     columns: integer("columns"),
     rows: integer("rows"),
-    background: rgba(controls["background-color"].value, controls["background-alpha"].value),
+    background: Number(controls["background-alpha"].value) === 0
+      ? "rgba(0, 0, 0, 0)"
+      : rgba(controls["background-color"].value, controls["background-alpha"].value),
     cornersEnabled,
     cornerColor: rgba(controls["corner-color"].value, controls["corner-alpha"].value),
     cornerWidth,
