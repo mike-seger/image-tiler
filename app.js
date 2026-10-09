@@ -353,8 +353,6 @@ function minimumPreviewZoom() {
     1,
     viewportWidth() * (1 - 2 * PREVIEW_SIDE_MARGIN)
       / (layout.outputWidth * previewBaseScale),
-    viewportHeight() * (1 - 2 * PREVIEW_SIDE_MARGIN)
-      / (layout.outputHeight * previewBaseScale),
   );
 }
 
