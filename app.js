@@ -723,6 +723,8 @@ async function encodeLargePng(state, image, onProgress) {
         await writer.writeRow(row);
       }
       onProgress((bandTop + bandHeight) / state.outputHeight);
+      // Yield so the status text repaints between bands.
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
     return await writer.finish();
   } catch (error) {
