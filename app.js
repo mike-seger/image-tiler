@@ -1,3 +1,5 @@
+import { PngWriter } from "./png-writer.js";
+
 const controls = Object.fromEntries(
   [...document.querySelectorAll("input, select")].map((element) => [element.id, element]),
 );
@@ -15,6 +17,11 @@ const frameFields = document.querySelector("#frame-fields");
 const resetButton = document.querySelector("#reset");
 const help = document.querySelector(".help");
 const STORAGE_KEY = "image-tiler-controls-v1";
+// Largest canvas area that every supported browser renders in one go.
+const MAX_SINGLE_CANVAS_AREA = 16_777_216;
+const EXPORT_BLOCK_WIDTH = 8192;
+const EXPORT_BLOCK_AREA = 8_388_608;
+const MAX_EXPORT_BYTES = 1_500_000_000;
 const MILLIMETRES_PER_UNIT = { mm: 1, in: 25.4, cm: 10, px: 25.4 / 96 };
 const PREVIEW_SIDE_MARGIN = 0.03;
 const PREVIEW_PATTERN_CONTRAST = 0.3;
@@ -44,6 +51,7 @@ let resizeAnimationFrame;
 let centerAnimationFrame;
 let initialPreviewAnimationFrame;
 let sourceMedianGray = 128;
+let exporting = false;
 
 function numeric(id) {
   const value = Number(controls[id].value);
@@ -253,47 +261,64 @@ function drawCornerMarkers(context, left, top, right, bottom, layoutState) {
   fillRect(context, right, bottom, widthX, widthY);
 }
 
+function drawLayout(context, state = layout, image = sourceImage) {
+  context.fillStyle = state.background;
+  context.fillRect(0, 0, state.outputWidth, state.outputHeight);
+
+  for (let row = 0; row < state.rows; row += 1) {
+    for (let column = 0; column < state.columns; column += 1) {
+      const instanceLeft = state.groupLeft + column * (state.instanceWidth + state.cornerWidthX);
+      const instanceTop = state.groupTop + row * (state.instanceHeight + state.cornerWidthY);
+      const tileLeft = instanceLeft + state.frameWidthX;
+      const tileTop = instanceTop + state.frameWidthY;
+      const instanceRight = instanceLeft + state.instanceWidth;
+      const instanceBottom = instanceTop + state.instanceHeight;
+
+      context.save();
+      if (state.mirror) {
+        context.translate(tileLeft + image.width, tileTop);
+        context.scale(-1, 1);
+        context.drawImage(image, 0, 0);
+      } else {
+        context.drawImage(image, tileLeft, tileTop);
+      }
+      context.restore();
+
+      if (state.frameEnabled) {
+        context.fillStyle = state.frameColor;
+        fillRect(context, instanceLeft, instanceTop, state.instanceWidth, state.frameWidthY);
+        fillRect(context, instanceLeft, tileTop, state.frameWidthX, image.height);
+        fillRect(context, tileLeft + image.width, tileTop, state.frameWidthX, image.height);
+        fillRect(context, instanceLeft, tileTop + image.height, state.instanceWidth, state.frameWidthY);
+      }
+
+      if (state.cornersEnabled) {
+        drawCornerMarkers(context, instanceLeft, instanceTop, instanceRight, instanceBottom, state);
+      }
+    }
+  }
+}
+
 function render(canvas, scale = 1) {
   const context = canvas.getContext("2d", { alpha: true });
   canvas.width = Math.max(1, Math.round(layout.outputWidth * scale));
   canvas.height = Math.max(1, Math.round(layout.outputHeight * scale));
   context.setTransform(scale, 0, 0, scale, 0, 0);
   context.clearRect(0, 0, layout.outputWidth, layout.outputHeight);
-  context.fillStyle = layout.background;
-  context.fillRect(0, 0, layout.outputWidth, layout.outputHeight);
+  drawLayout(context);
+}
 
-  for (let row = 0; row < layout.rows; row += 1) {
-    for (let column = 0; column < layout.columns; column += 1) {
-      const instanceLeft = layout.groupLeft + column * (layout.instanceWidth + layout.cornerWidthX);
-      const instanceTop = layout.groupTop + row * (layout.instanceHeight + layout.cornerWidthY);
-      const tileLeft = instanceLeft + layout.frameWidthX;
-      const tileTop = instanceTop + layout.frameWidthY;
-      const instanceRight = instanceLeft + layout.instanceWidth;
-      const instanceBottom = instanceTop + layout.instanceHeight;
-
-      context.save();
-      if (layout.mirror) {
-        context.translate(tileLeft + sourceImage.width, tileTop);
-        context.scale(-1, 1);
-        context.drawImage(sourceImage, 0, 0);
-      } else {
-        context.drawImage(sourceImage, tileLeft, tileTop);
-      }
-      context.restore();
-
-      if (layout.frameEnabled) {
-        context.fillStyle = layout.frameColor;
-        fillRect(context, instanceLeft, instanceTop, layout.instanceWidth, layout.frameWidthY);
-        fillRect(context, instanceLeft, tileTop, layout.frameWidthX, sourceImage.height);
-        fillRect(context, tileLeft + sourceImage.width, tileTop, layout.frameWidthX, sourceImage.height);
-        fillRect(context, instanceLeft, tileTop + sourceImage.height, layout.instanceWidth, layout.frameWidthY);
-      }
-
-      if (layout.cornersEnabled) {
-        drawCornerMarkers(context, instanceLeft, instanceTop, instanceRight, instanceBottom, layout);
-      }
-    }
+// Draws a rectangular window of the layout at full resolution so that exports
+// never need a canvas the size of the whole image.
+function renderRegion(canvas, context, state, image, left, top, width, height) {
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
   }
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.setTransform(1, 0, 0, 1, -left, -top);
+  drawLayout(context, state, image);
 }
 
 function viewportWidth() {
@@ -430,9 +455,43 @@ function updateAlphaOutput(input, output) {
   output.value = Number(input.value).toFixed(2);
 }
 
+let statusMessage = "";
+let statusIsError = false;
+let hoverPosition;
+
+function renderStatus() {
+  const coordinates = hoverPosition
+    ? ` · x: ${String(hoverPosition.x).padStart(4, "0")} · y: ${String(hoverPosition.y).padStart(4, "0")}`
+    : "";
+  status.textContent = statusMessage + coordinates;
+  status.classList.toggle("error", statusIsError);
+}
+
 function setStatus(message, isError = false) {
-  status.textContent = message;
-  status.classList.toggle("error", isError);
+  statusMessage = message;
+  statusIsError = isError;
+  renderStatus();
+}
+
+function trackPosition(event) {
+  if (!layout) {
+    return;
+  }
+  const scale = previewBaseScale * previewZoom;
+  const bounds = preview.getBoundingClientRect();
+  const x = Math.floor((event.clientX - bounds.left) / scale);
+  const y = Math.floor((event.clientY - bounds.top) / scale);
+  const inside = x >= 0 && y >= 0 && x < layout.outputWidth && y < layout.outputHeight;
+  const nextPosition = inside ? { x, y } : undefined;
+  if (nextPosition?.x !== hoverPosition?.x || nextPosition?.y !== hoverPosition?.y) {
+    hoverPosition = nextPosition;
+    renderStatus();
+  }
+}
+
+function clearPosition() {
+  hoverPosition = undefined;
+  renderStatus();
 }
 
 function rememberControls() {
@@ -502,6 +561,7 @@ function updateVisibility() {
 
 function updatePreview() {
   updateVisibility();
+  hoverPosition = undefined;
   updateAlphaOutput(controls["background-alpha"], document.querySelector("#background-alpha-value"));
   updateAlphaOutput(controls["corner-alpha"], document.querySelector("#corner-alpha-value"));
   updateAlphaOutput(controls["frame-alpha"], document.querySelector("#frame-alpha-value"));
@@ -577,6 +637,8 @@ document.addEventListener("click", (event) => {
     help.open = false;
   }
 });
+preview.addEventListener("pointermove", trackPosition);
+preview.addEventListener("pointerleave", clearPosition);
 preview.addEventListener("wheel", zoomPreview, { passive: false });
 preview.addEventListener("pointerdown", startPan);
 preview.addEventListener("pointermove", panPreview);
@@ -602,17 +664,110 @@ new ResizeObserver((entries) => {
   });
 }).observe(previewViewport);
 
-downloadButton.addEventListener("click", () => {
-  if (!layout) {
+function formatBytes(bytes) {
+  if (bytes >= 1e9) {
+    return `${(bytes / 1e9).toFixed(1)} GB`;
+  }
+  if (bytes >= 1e6) {
+    return `${(bytes / 1e6).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1e3))} kB`;
+}
+
+function outputFilename(state) {
+  const mirrorSuffix = state.mirror ? "-mirrored" : "";
+  return `${sourceFilename}-${state.inputMmX}x${state.inputMmY}mm-to-${state.outputMmX}x${state.outputMmY}mm-${state.columns}x${state.rows}${mirrorSuffix}.png`;
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.download = filename;
+  link.href = url;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// Rebuilds the layout in horizontal bands of blocks and feeds the pixels to a
+// streaming PNG encoder, so the memory needed stays independent of the output
+// size and no canvas ever has to hold the whole image.
+async function encodeLargePng(state, image, onProgress) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) {
+    throw new Error("Canvas rendering is not available.");
+  }
+  const blockWidth = Math.min(state.outputWidth, EXPORT_BLOCK_WIDTH);
+  const blockHeight = Math.min(
+    state.outputHeight,
+    Math.max(1, Math.floor(EXPORT_BLOCK_AREA / blockWidth)),
+  );
+  const row = new Uint8Array(state.outputWidth * 4);
+  const writer = new PngWriter(state.outputWidth, state.outputHeight, { maxBytes: MAX_EXPORT_BYTES });
+
+  try {
+    for (let bandTop = 0; bandTop < state.outputHeight; bandTop += blockHeight) {
+      const bandHeight = Math.min(blockHeight, state.outputHeight - bandTop);
+      const blocks = [];
+      for (let blockLeft = 0; blockLeft < state.outputWidth; blockLeft += blockWidth) {
+        const width = Math.min(blockWidth, state.outputWidth - blockLeft);
+        renderRegion(canvas, context, state, image, blockLeft, bandTop, width, bandHeight);
+        const { data } = context.getImageData(0, 0, width, bandHeight);
+        blocks.push({ left: blockLeft, width, data });
+      }
+      for (let offset = 0; offset < bandHeight; offset += 1) {
+        for (const block of blocks) {
+          const start = offset * block.width * 4;
+          row.set(block.data.subarray(start, start + block.width * 4), block.left * 4);
+        }
+        await writer.writeRow(row);
+      }
+      onProgress((bandTop + bandHeight) / state.outputHeight);
+    }
+    return await writer.finish();
+  } catch (error) {
+    await writer.abort();
+    throw error;
+  }
+}
+
+downloadButton.addEventListener("click", async () => {
+  if (!layout || exporting) {
     return;
   }
-  const output = document.createElement("canvas");
-  render(output);
-  const link = document.createElement("a");
-  const mirrorSuffix = layout.mirror ? "-mirrored" : "";
-  link.download = `${sourceFilename}-${layout.inputMmX}x${layout.inputMmY}mm-to-${layout.outputMmX}x${layout.outputMmY}mm-${layout.columns}x${layout.rows}${mirrorSuffix}.png`;
-  link.href = output.toDataURL("image/png");
-  link.click();
+  const state = layout;
+  const filename = outputFilename(state);
+
+  if (state.outputWidth * state.outputHeight <= MAX_SINGLE_CANVAS_AREA) {
+    const output = document.createElement("canvas");
+    render(output);
+    const link = document.createElement("a");
+    link.download = filename;
+    link.href = output.toDataURL("image/png");
+    link.click();
+    return;
+  }
+
+  if (typeof CompressionStream !== "function") {
+    setStatus("This browser cannot export images of this size. Reduce the output dimensions or use a current browser.", true);
+    return;
+  }
+
+  const summary = `${state.columns} x ${state.rows} instances · ${state.outputWidth} x ${state.outputHeight} pixels`;
+  exporting = true;
+  downloadButton.disabled = true;
+  try {
+    const blob = await encodeLargePng(state, sourceImage, (fraction) => {
+      setStatus(`Encoding ${summary}… ${Math.round(fraction * 100)}%`);
+    });
+    saveBlob(blob, filename);
+    setStatus(`${summary} · ${formatBytes(blob.size)} PNG`);
+  } catch (error) {
+    setStatus(`Could not export PNG: ${error.message}`, true);
+  } finally {
+    exporting = false;
+    downloadButton.disabled = false;
+  }
 });
 
 restoreControls();
