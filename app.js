@@ -1,4 +1,6 @@
 import { PngWriter } from "./png-writer.js";
+import { decodePng } from "./png-source.js";
+import { composeRow, cornerMarkerRects, frameRects, parseColors } from "./layout-render.js";
 
 const controls = Object.fromEntries(
   [...document.querySelectorAll("input, select")].map((element) => [element.id, element]),
@@ -42,6 +44,7 @@ const defaultControlValues = Object.fromEntries(controlElements.map((element) =>
 ]));
 
 let sourceImage;
+let sourceFile;
 let sourceFilename = "image";
 let layout;
 let previewBaseScale = 1;
@@ -245,20 +248,10 @@ function fillRect(context, x, y, width, height) {
 }
 
 function drawCornerMarkers(context, left, top, right, bottom, layoutState) {
-  const { cornerWidthX: widthX, cornerWidthY: widthY, cornerLengthX: lengthX, cornerLengthY: lengthY } = layoutState;
   context.fillStyle = layoutState.cornerColor;
-  fillRect(context, left, top - widthY, lengthX, widthY);
-  fillRect(context, left - widthX, top, widthX, lengthY);
-  fillRect(context, left - widthX, top - widthY, widthX, widthY);
-  fillRect(context, right - lengthX, top - widthY, lengthX, widthY);
-  fillRect(context, right, top, widthX, lengthY);
-  fillRect(context, right, top - widthY, widthX, widthY);
-  fillRect(context, left, bottom, lengthX, widthY);
-  fillRect(context, left - widthX, bottom - lengthY, widthX, lengthY);
-  fillRect(context, left - widthX, bottom, widthX, widthY);
-  fillRect(context, right - lengthX, bottom, lengthX, widthY);
-  fillRect(context, right, bottom - lengthY, widthX, lengthY);
-  fillRect(context, right, bottom, widthX, widthY);
+  for (const [x, y, width, height] of cornerMarkerRects(left, top, right, bottom, layoutState)) {
+    fillRect(context, x, y, width, height);
+  }
 }
 
 function drawLayout(context, state = layout, image = sourceImage) {
@@ -286,10 +279,17 @@ function drawLayout(context, state = layout, image = sourceImage) {
 
       if (state.frameEnabled) {
         context.fillStyle = state.frameColor;
-        fillRect(context, instanceLeft, instanceTop, state.instanceWidth, state.frameWidthY);
-        fillRect(context, instanceLeft, tileTop, state.frameWidthX, image.height);
-        fillRect(context, tileLeft + image.width, tileTop, state.frameWidthX, image.height);
-        fillRect(context, instanceLeft, tileTop + image.height, state.instanceWidth, state.frameWidthY);
+        for (const [x, y, width, height] of frameRects(
+          state,
+          instanceLeft,
+          instanceTop,
+          tileLeft,
+          tileTop,
+          image.width,
+          image.height,
+        )) {
+          fillRect(context, x, y, width, height);
+        }
       }
 
       if (state.cornersEnabled) {
@@ -599,6 +599,7 @@ function updatePreview() {
 
 async function loadImage(file) {
   sourceImage = await createImageBitmap(file);
+  sourceFile = file;
   sourceMedianGray = calculateMedianGray(sourceImage);
   sourceFilename = file.name.replace(/\.png$/i, "") || "image";
   imageDetails.textContent = `${file.name} · ${sourceImage.width} x ${sourceImage.height} pixels`;
@@ -688,10 +689,37 @@ function saveBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-// Rebuilds the layout in horizontal bands of blocks and feeds the pixels to a
-// streaming PNG encoder, so the memory needed stays independent of the output
-// size and no canvas ever has to hold the whole image.
-async function encodeLargePng(state, image, onProgress) {
+// Composes the export one row at a time straight from the decoded source pixels.
+// No canvas is involved, so nothing is resampled, premultiplied or colour
+// converted.
+async function encodeLosslessPng(state, image, source, onProgress) {
+  const rowWidth = state.outputWidth;
+  const colors = parseColors(state);
+  const row = new Uint8Array(rowWidth * 4);
+  const writer = new PngWriter(rowWidth, state.outputHeight, { maxBytes: MAX_EXPORT_BYTES });
+
+  try {
+    for (let y = 0; y < state.outputHeight; y += 1) {
+      composeRow(row, state, image, source, y, colors);
+      await writer.writeRow(row);
+      if ((y & 63) === 0) {
+        onProgress(y / state.outputHeight);
+      }
+      if ((y & 255) === 255 && !document.hidden) {
+        // Yield so the status text repaints. Timers are suspended while the tab
+        // is hidden, so only do this when the export is actually on screen.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+    return await writer.finish();
+  } catch (error) {
+    await writer.abort();
+    throw error;
+  }
+}
+
+// Fallback for sources the decoder cannot read: render blocks through a canvas.
+async function encodeCanvasBlocks(state, image, onProgress) {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d", { alpha: true });
   if (!context) {
@@ -723,8 +751,10 @@ async function encodeLargePng(state, image, onProgress) {
         await writer.writeRow(row);
       }
       onProgress((bandTop + bandHeight) / state.outputHeight);
-      // Yield so the status text repaints between bands.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (!document.hidden) {
+        // Yield so the status text repaints between bands.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
     }
     return await writer.finish();
   } catch (error) {
@@ -733,12 +763,31 @@ async function encodeLargePng(state, image, onProgress) {
   }
 }
 
-downloadButton.addEventListener("click", async () => {
-  if (!layout || exporting) {
+async function readSourcePixels() {
+  if (!sourceFile) {
+    return undefined;
+  }
+  try {
+    const decoded = await decodePng(await sourceFile.arrayBuffer());
+    if (decoded.width !== sourceImage.width || decoded.height !== sourceImage.height) {
+      return undefined;
+    }
+    return decoded;
+  } catch {
+    return undefined;
+  }
+}
+
+async function exportPng(state, filename, summary) {
+  const source = typeof CompressionStream === "function" ? await readSourcePixels() : undefined;
+  if (source) {
+    const blob = await encodeLosslessPng(state, sourceImage, source, (fraction) => {
+      setStatus(`Encoding ${summary}… ${Math.round(fraction * 100)}%`);
+    });
+    saveBlob(blob, filename);
+    setStatus(`${summary} · ${formatBytes(blob.size)} PNG`);
     return;
   }
-  const state = layout;
-  const filename = outputFilename(state);
 
   if (state.outputWidth * state.outputHeight <= MAX_SINGLE_CANVAS_AREA) {
     const output = document.createElement("canvas");
@@ -755,15 +804,23 @@ downloadButton.addEventListener("click", async () => {
     return;
   }
 
+  const blob = await encodeCanvasBlocks(state, sourceImage, (fraction) => {
+    setStatus(`Encoding ${summary}… ${Math.round(fraction * 100)}%`);
+  });
+  saveBlob(blob, filename);
+  setStatus(`${summary} · ${formatBytes(blob.size)} PNG`);
+}
+
+downloadButton.addEventListener("click", async () => {
+  if (!layout || exporting) {
+    return;
+  }
+  const state = layout;
   const summary = `${state.columns} x ${state.rows} instances · ${state.outputWidth} x ${state.outputHeight} pixels`;
   exporting = true;
   downloadButton.disabled = true;
   try {
-    const blob = await encodeLargePng(state, sourceImage, (fraction) => {
-      setStatus(`Encoding ${summary}… ${Math.round(fraction * 100)}%`);
-    });
-    saveBlob(blob, filename);
-    setStatus(`${summary} · ${formatBytes(blob.size)} PNG`);
+    await exportPng(state, outputFilename(state), summary);
   } catch (error) {
     setStatus(`Could not export PNG: ${error.message}`, true);
   } finally {
